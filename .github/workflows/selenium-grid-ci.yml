@@ -49,29 +49,66 @@ jobs:
       # ---- Start Selenium Grid using Docker Compose ----
       - name: Start Selenium Grid
         run: docker compose -f docker-compose.yml up -d
-        
-      - name: Diagnostic:containers, status and logs
+      - name: Wait for nodes to register (robust)
         run: |
-          echo "=== docker compose ps ==="
-          docker compose ps
-          echo
-          echo "=== hub /status ==="
-          curl -sS http://localhost:4444/status | jq '.' || true
-          echo
-          echo "=== distributor status ==="
-          curl -sS http://localhost:4444/se/grid/distributor/status | jq '.' || true
-          echo
-          echo "=== last 200 lines: hub logs ==="
-          docker compose logs --no-color selenium-hub | sed -n '1,200p' || true
-          echo
-          echo "=== last 200 lines: node-chrome logs ==="
-          docker compose logs --no-color node-chrome | sed -n '1,200p' || true
-          echo
-          echo "=== last 200 lines: node-firefox logs ==="
-          docker compose logs --no-color node-firefox | sed -n '1,200p' || true
-          echo
-          echo "=== inside node-chrome: can it reach hub HTTP? ==="
-          docker compose exec -T node-chrome curl -sS http://selenium-hub:4444/status | jq '.' || true
+          for i in {1..120}; do
+            RAW=$(curl -fsS http://localhost:4444/se/grid/distributor/status || true)
+            echo "RAW distributor JSON (truncated):"
+            echo "$RAW" | sed -n '1,50p'
+            NODES=$(echo "$RAW" | jq -r '((.distributor.status.nodes // []) | length) // 0' 2>/dev/null || echo 0)
+            # ensure integer: keep only leading digits, fallback 0
+            NODES=$(echo "$NODES" | grep -Eo '^[0-9]+' || echo 0)
+            echo "Distributor nodes: ${NODES}"
+            if [ "${NODES:-0}" -ge 1 ]; then
+              echo "Nodes registered: $NODES"; exit 0
+            fi
+            echo "Waiting for nodes... ($i)"; sleep 2
+          done
+          echo "Nodes never registered"; exit 1
+
+      - name: Wait for a free browser slot (robust)
+        run: |
+          for i in {1..120}; do
+            RAW=$(curl -fsS http://localhost:4444/se/grid/distributor/status || true)
+            echo "RAW distributor JSON (truncated):"
+            echo "$RAW" | sed -n '1,50p'
+            FREE=$(echo "$RAW" | jq -r --arg b "${BROWSER}" '
+              [
+                (.distributor.status.nodes // [])[]? |
+                (.slots // [])[]? |
+                select((.stereotype.browserName // "") == $b and (.session // null) == null)
+              ] | length
+            ' 2>/dev/null || echo 0)
+            FREE=$(echo "$FREE" | grep -Eo '^[0-9]+' || echo 0)
+            echo "Free ${BROWSER} slots: ${FREE}"
+            if [ "${FREE:-0}" -ge 1 ]; then
+              echo "Free ${BROWSER} slot available"; exit 0
+            fi
+            echo "Waiting for free ${BROWSER} slot... ($i)"; sleep 2
+          done
+          echo "No free ${BROWSER} slot"; exit 1
+            - name: Diagnostic:containers, status and logs
+              run: |
+                echo "=== docker compose ps ==="
+                docker compose ps
+                echo
+                echo "=== hub /status ==="
+                curl -sS http://localhost:4444/status | jq '.' || true
+                echo
+                echo "=== distributor status ==="
+                curl -sS http://localhost:4444/se/grid/distributor/status | jq '.' || true
+                echo
+                echo "=== last 200 lines: hub logs ==="
+                docker compose logs --no-color selenium-hub | sed -n '1,200p' || true
+                echo
+                echo "=== last 200 lines: node-chrome logs ==="
+                docker compose logs --no-color node-chrome | sed -n '1,200p' || true
+                echo
+                echo "=== last 200 lines: node-firefox logs ==="
+                docker compose logs --no-color node-firefox | sed -n '1,200p' || true
+                echo
+                echo "=== inside node-chrome: can it reach hub HTTP? ==="
+                docker compose exec -T node-chrome curl -sS http://selenium-hub:4444/status | jq '.' || true
 
       - name: Wait for hub HTTP and ready
         run: |
