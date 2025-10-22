@@ -17,7 +17,7 @@ jobs:
         ports:
           - 4444:4444
         options: >-
-          --health-cmd="curl -s http://localhost:4444/status | jq -r .value.ready | grep true || exit 1"
+          --health-cmd="curl -s http://localhost:4444/status | grep -q '\"ready\":true' || exit 1"
           --health-interval=5s
           --health-timeout=3s
           --health-retries=30
@@ -76,50 +76,63 @@ jobs:
       - name: Build (Release)
         run: dotnet build --configuration Release --no-restore
 
-      - name: Ensure jq is available
+      - name: Ensure jq is available (optional)
         run: |
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y jq
           fi
 
-      # Safer wait: first wait for hub ready, then verify at least one node registered.
-      - name: Wait for Selenium Grid (hub + nodes)
+      # Wait until hub is ready, nodes are registered, and there is a free slot for the current browser
+      - name: Wait for Selenium Grid (hub + nodes + free slot)
         shell: bash
         run: |
           set -euo pipefail
 
           echo "Waiting for hub readiness..."
           for i in {1..60}; do
-            READY=$(curl -fsS http://localhost:4444/status | jq -r '.value.ready // false')
+            READY=$(curl -fsS http://localhost:4444/status | awk -F'ready\":' '{print $2}' | grep -o 'true' || true)
             [[ "$READY" == "true" ]] && echo "Hub is ready" && break
             echo "Hub not ready yet... ($i)"; sleep 2
             [[ $i -eq 60 ]] && echo "Hub never became ready" && exit 1
           done
 
           echo "Waiting for any node to register..."
-          for i in {1..90}; do
+          for i in {1..120}; do
             NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
-              | jq -r '((.distributor.status.nodes // []) | length)')
-            if [[ "$NODES" -ge 1 ]]; then
+              | python3 - <<'PY'
+import sys, json
+data=json.load(sys.stdin)
+nodes=(data.get("distributor",{}).get("status",{}).get("nodes") or [])
+print(len(nodes))
+PY
+            )
+            if [[ "${NODES:-0}" -ge 1 ]]; then
               echo "Nodes registered: $NODES"
               break
             fi
             echo "No nodes yet... ($i)"; sleep 2
-            [[ $i -eq 90 ]] && echo "Timed out waiting for nodes" && exit 1
+            [[ $i -eq 120 ]] && echo "Timed out waiting for nodes" && exit 1
           done
 
           echo "Waiting for at least one free slot for ${BROWSER}..."
           for i in {1..120}; do
             FREE=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
-              | jq --arg b "$BROWSER" -r '
-                  [
-                    (.distributor.status.nodes // [])[] |
-                    (.slots // [])[] |
-                    select((.stereotype.browserName // "") == $b and (.session // null) == null)
-                  ] | length
-                ')
-            if [[ "$FREE" -ge 1 ]]; then
+              | python3 - "$BROWSER" <<'PY'
+import sys, json
+browser=sys.argv[1]
+data=json.load(sys.stdin)
+nodes=(data.get("distributor",{}).get("status",{}).get("nodes") or [])
+free=0
+for n in nodes:
+  for s in (n.get("slots") or []):
+    if (s.get("stereotype",{}).get("browserName","").lower()==browser.lower()
+        and not s.get("session")):
+      free+=1
+print(free)
+PY
+            )
+            if [[ "${FREE:-0}" -ge 1 ]]; then
               echo "Free ${BROWSER} slots: $FREE"
               exit 0
             fi
@@ -127,7 +140,7 @@ jobs:
           done
 
           echo "Timed out waiting for a free ${BROWSER} slot"
-          curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
+          curl -fsS http://localhost:4444/se/grid/distributor/status | head -n 400 || true
           exit 1
 
       - name: Run tests
@@ -145,3 +158,14 @@ jobs:
             **/TestResults_*.trx
             **/Screenshots/**
           if-no-files-found: ignore
+
+      - name: Debug containers (docker ps + logs)
+        if: failure() || always()
+        run: |
+          docker ps -a
+          echo '=== Hub logs ==='
+          docker logs $(docker ps -aq --filter "ancestor=selenium/hub:4.23.0") || true
+          echo '=== Chrome logs ==='
+          docker logs $(docker ps -aq --filter "ancestor=selenium/node-chrome:4.23.0") || true
+          echo '=== Firefox logs ==='
+          docker logs $(docker ps -aq --filter "ancestor=selenium/node-firefox:4.23.0") || true
