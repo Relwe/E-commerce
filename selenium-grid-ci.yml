@@ -1,0 +1,101 @@
+name: Selenium Grid CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      selenium-hub:
+        image: selenium/hub:4.23.0
+        ports:
+          - 4444:4444
+        options: >-
+          --health-cmd="curl -s http://localhost:4444/status | jq -r .value.ready | grep true || exit 1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+
+      chrome:
+        image: selenium/node-chrome:4.23.0
+        env:
+          SE_EVENT_BUS_HOST: selenium-hub
+          SE_EVENT_BUS_PUBLISH_PORT: 4442
+          SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+        options: >-
+          --shm-size="2g"
+
+      firefox:
+        image: selenium/node-firefox:4.23.0
+        env:
+          SE_EVENT_BUS_HOST: selenium-hub
+          SE_EVENT_BUS_PUBLISH_PORT: 4442
+          SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+        options: >-
+          --shm-size="2g"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [ chrome, firefox ]
+
+    env:
+      RUN_TARGET: remote
+      GRID_URL: http://selenium-hub:4444
+      BROWSER: ${{ matrix.browser }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Wait for Selenium Grid
+        run: |
+          for i in {1..60}; do
+            READY=$(curl -s http://localhost:4444/status | jq -r '.value.ready')
+            if [ "$READY" = "true" ]; then
+              echo "Grid is ready"
+              break
+            fi
+            echo "Waiting for grid..."
+            sleep 2
+          done
+
+      - name: Run Selenium tests
+        run: |
+          mkdir -p TestResults Screenshots
+          dotnet test --configuration Release --no-build \
+            --logger "trx;LogFileName=TestResults_${{ matrix.browser }}.trx"
+
+      - name: Upload Test Artifacts (TRX + Screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-${{ matrix.browser }}
+          path: |
+            **/TestResults_*.trx
+            **/Screenshots/**
+          if-no-files-found: ignore
