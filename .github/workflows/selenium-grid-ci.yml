@@ -88,31 +88,46 @@ jobs:
 
       # Wait until hub is ready AND at least one free slot exists for the current browser
       - name: Wait for Selenium Grid (hub + slots)
-        run: |
-          set -e
-          echo "Waiting for hub readiness..."
-          for i in {1..60}; do
-            READY=$(curl -s http://localhost:4444/status | jq -r '.value.ready')
-            if [ "$READY" = "true" ]; then
-              echo "Hub is ready"
-              break
-            fi
-            echo "Hub not ready yet..."; sleep 2
-            if [ $i -eq 60 ]; then echo "Hub never became ready"; exit 1; fi
-          done
+  run: |
+    set -e
 
-          echo "Waiting for an available '${BROWSER}' slot..."
-          for i in {1..90}; do
-            AVAILABLE=$(curl -s http://localhost:4444/se/grid/distributor/status \
-              | jq "[.distributor.status.nodes[].slots[]
-                     | select(.stereotype.\"browserName\"==\"${BROWSER}\" and .session==null)] | length")
-            if [ "$AVAILABLE" -ge 1 ]; then
-              echo "Found ${AVAILABLE} free '${BROWSER}' slot(s)."
-              exit 0
-            fi
-            echo "No free '${BROWSER}' slot yet..."; sleep 2
-          done
-          echo "Timed out waiting for a free '${BROWSER}' slot"; exit 1
+    echo "Waiting for hub readiness..."
+    for i in {1..60}; do
+      READY=$(curl -fsS http://localhost:4444/status | jq -r '.value.ready')
+      if [ "$READY" = "true" ]; then
+        echo "Hub is ready"
+        break
+      fi
+      echo "Hub not ready yet... ($i)"; sleep 2
+      if [ $i -eq 60 ]; then echo "Hub never became ready"; exit 1; fi
+    done
+
+    echo "Waiting for an available '${BROWSER}' slot..."
+    for i in {1..120}; do
+      # Make jq null-safe: treat missing nodes/slots as empty arrays
+      AVAILABLE=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
+        | jq --arg browser "$BROWSER" -r '
+            [
+              (.distributor.status.nodes // [])[]            # nodes array (or empty)
+              | (.slots // [])[]                             # each node's slots (or empty)
+              | select(.stereotype.browserName == $browser
+                       and (.session // null) == null)        # free slot
+            ] | length
+          ')
+
+      if [ "$AVAILABLE" -ge 1 ]; then
+        echo "Found ${AVAILABLE} free '$BROWSER' slot(s)."
+        exit 0
+      fi
+
+      echo "No free '$BROWSER' slot yet... ($i)"; sleep 2
+    done
+
+    echo "Timed out waiting for a free '$BROWSER' slot"
+    echo "Distributor status snapshot (for debugging):"
+    curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
+    exit 1
+
 
       - name: Run tests
         run: |
