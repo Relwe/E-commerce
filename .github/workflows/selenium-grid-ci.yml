@@ -1,153 +1,36 @@
 name: Selenium Grid CI
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    branches:
+      - main # Trigger on pushes to the main branch
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    strategy:
-      fail-fast: false
-      matrix:
-        browser: [ chrome, firefox ]
-
-    env:
-      RUN_TARGET: remote
-      GRID_URL: http://localhost:4444
-      BROWSER: ${{ matrix.browser }}
-      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  selenium-tests:
+    runs-on: ubuntu-latest # Use a fresh Ubuntu environment
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4 # Get your code
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Cache NuGet
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      - name: Restore
-        run: dotnet restore
-
-      - name: Build (Release)
-        run: dotnet build --configuration Release --no-restore
-
-      # ---- Start Selenium Grid using Docker Compose ----
-      - name: Start Selenium Grid
-        run: docker compose -f docker-compose.yml up -d
-      - name: Wait for nodes to register (robust)
+      - name: Set up Docker Compose
         run: |
-          for i in {1..120}; do
-            RAW=$(curl -fsS http://localhost:4444/se/grid/distributor/status || true)
-            echo "RAW distributor JSON (truncated):"
-            echo "$RAW" | sed -n '1,50p'
-            NODES=$(echo "$RAW" | jq -r '((.distributor.status.nodes // []) | length) // 0' 2>/dev/null || echo 0)
-            # ensure integer: keep only leading digits, fallback 0
-            NODES=$(echo "$NODES" | grep -Eo '^[0-9]+' || echo 0)
-            echo "Distributor nodes: ${NODES}"
-            if [ "${NODES:-0}" -ge 1 ]; then
-              echo "Nodes registered: $NODES"; exit 0
-            fi
-            echo "Waiting for nodes... ($i)"; sleep 2
-          done
-          echo "Nodes never registered"; exit 1
+          docker-compose up -d --build # Start Selenium Hub and Nodes in detached mode
 
-      - name: Wait for a free browser slot (robust)
+      - name: Wait for Selenium Grid to be ready
         run: |
-          for i in {1..120}; do
-            RAW=$(curl -fsS http://localhost:4444/se/grid/distributor/status || true)
-            echo "RAW distributor JSON (truncated):"
-            echo "$RAW" | sed -n '1,50p'
-            FREE=$(echo "$RAW" | jq -r --arg b "${BROWSER}" '
-              [
-                (.distributor.status.nodes // [])[]? |
-                (.slots // [])[]? |
-                select((.stereotype.browserName // "") == $b and (.session // null) == null)
-              ] | length
-            ' 2>/dev/null || echo 0)
-            FREE=$(echo "$FREE" | grep -Eo '^[0-9]+' || echo 0)
-            echo "Free ${BROWSER} slots: ${FREE}"
-            if [ "${FREE:-0}" -ge 1 ]; then
-              echo "Free ${BROWSER} slot available"; exit 0
-            fi
-            echo "Waiting for free ${BROWSER} slot... ($i)"; sleep 2
-          done
-          echo "No free ${BROWSER} slot"; exit 1
-            - name: Diagnostic:containers, status and logs
-              run: |
-                echo "=== docker compose ps ==="
-                docker compose ps
-                echo
-                echo "=== hub /status ==="
-                curl -sS http://localhost:4444/status | jq '.' || true
-                echo
-                echo "=== distributor status ==="
-                curl -sS http://localhost:4444/se/grid/distributor/status | jq '.' || true
-                echo
-                echo "=== last 200 lines: hub logs ==="
-                docker compose logs --no-color selenium-hub | sed -n '1,200p' || true
-                echo
-                echo "=== last 200 lines: node-chrome logs ==="
-                docker compose logs --no-color node-chrome | sed -n '1,200p' || true
-                echo
-                echo "=== last 200 lines: node-firefox logs ==="
-                docker compose logs --no-color node-firefox | sed -n '1,200p' || true
-                echo
-                echo "=== inside node-chrome: can it reach hub HTTP? ==="
-                docker compose exec -T node-chrome curl -sS http://selenium-hub:4444/status | jq '.' || true
+          # A simple wait mechanism, you might need a more robust one for production
+          sleep 30 
 
-      - name: Wait for hub HTTP and ready
+      - name: Run Selenium Tests
         run: |
-          for i in {1..60}; do
-            STATUS=$(curl -fsS http://localhost:4444/status || true)
-            echo "$STATUS" | jq '.' || echo "$STATUS"
-            if echo "$STATUS" | jq -e '.value.ready == true' >/dev/null 2>&1; then
-              echo "Hub HTTP reachable and ready"; exit 0
-            fi
-            echo "Waiting for hub ready... ($i)"; sleep 2
-          done
-          echo "Hub never reported ready"; exit 1
-
-      - name: Wait for nodes to register
-        run: |
-          for i in {1..120}; do
-            NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status || true \
-              | jq -r '((.distributor.status.nodes // []) | length)')
-            echo "Distributor nodes: ${NODES:-0}"
-            if [ "${NODES:-0}" -ge 1 ]; then
-              echo "Nodes registered: $NODES"; exit 0
-            fi
-            echo "Waiting for nodes... ($i)"; sleep 2
-          done
-          echo "Nodes never registered"; exit 1
-
-      # ---- Run tests ----
-      - name: Run tests
-        run: |
-          mkdir -p TestResults Screenshots
+          # Replace 'your_test_command_here' with the actual command to run your tests.
+          # This could be a command to execute a test runner (e.g., Maven, npm test, pytest).
+          # Ensure your tests are configured to connect to the Selenium Hub (localhost:4444).
+           mkdir -p TestResults Screenshots
           dotnet test --configuration Release --no-build \
             --logger "trx;LogFileName=TestResults_${{ matrix.browser }}.trx"
-
-      - name: Upload test artifacts (TRX + screenshots)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-artifacts-${{ matrix.browser }}
-          path: |
-            **/TestResults_*.trx
-            **/Screenshots/**
-          if-no-files-found: ignore
+      - name: Tear down Docker Compose
+        if: always() # Ensure this step runs even if tests fail
+        run: |
+          docker-compose down # Stop and remove the containers
