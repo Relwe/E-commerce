@@ -10,17 +10,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     services:
       selenium-hub:
         image: selenium/hub:4.23.0
         ports:
           - 4444:4444
-        options: >-
-          --health-cmd="curl -s http://localhost:4444/status | grep -q '\"ready\":true' || exit 1"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=30
+        # no healthcheck here
 
       chrome:
         image: selenium/node-chrome:4.23.0
@@ -76,60 +73,58 @@ jobs:
       - name: Build (Release)
         run: dotnet build --configuration Release --no-restore
 
-      - name: Ensure jq is available (optional)
+      # ---- Wait for Grid (no container healthcheck) ----
+      - name: Wait for hub HTTP
         run: |
-          if ! command -v jq >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
+          for i in {1..60}; do
+            if curl -fsS http://localhost:4444/status >/dev/null; then
+              echo "Hub HTTP reachable"; exit 0
+            fi
+            echo "Waiting for hub HTTP... ($i)"; sleep 2
+          done
+          echo "Hub never became reachable"; exit 1
 
-      # Wait: hub ready -> nodes registered -> free slot for ${BROWSER}
-      - name: Wait for Selenium Grid (hub + nodes + free slot)
-        shell: bash
+      - name: Wait for hub ready flag
         run: |
-          set -euo pipefail
-
-          echo "Waiting for hub readiness..."
           for i in {1..60}; do
             if curl -fsS http://localhost:4444/status | grep -q '"ready":true'; then
-              echo "Hub is ready"; break
+              echo "Hub is ready"; exit 0
             fi
-            echo "Hub not ready yet... ($i)"; sleep 2
-            if [ $i -eq 60 ]; then echo "Hub never became ready"; exit 1; fi
+            echo "Waiting for hub ready... ($i)"; sleep 2
           done
+          echo "Hub never reported ready"; exit 1
 
-          echo "Waiting for any node to register..."
+      - name: Wait for nodes to register
+        run: |
           for i in {1..120}; do
             NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
               | jq -r '((.distributor.status.nodes // []) | length)')
             if [ "${NODES:-0}" -ge 1 ]; then
-              echo "Nodes registered: $NODES"; break
+              echo "Nodes registered: $NODES"; exit 0
             fi
-            echo "No nodes yet... ($i)"; sleep 2
-            if [ $i -eq 120 ]; then echo "Timed out waiting for nodes"; exit 1; fi
+            echo "Waiting for nodes... ($i)"; sleep 2
           done
+          echo "Nodes never registered"; exit 1
 
-          echo "Waiting for a free '${BROWSER}' slot..."
+      - name: Wait for a free '${{ matrix.browser }}' slot
+        run: |
           for i in {1..120}; do
             FREE=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
-              | jq -r --arg b "$BROWSER" '
-                    [
-                      (.distributor.status.nodes // [])[]? |
-                      (.slots // [])[]? |
-                      select((.stereotype.browserName // "") == $b and (.session // null) == null)
-                    ] | length
+              | jq -r --arg b "${BROWSER}" '
+                  [
+                    (.distributor.status.nodes // [])[]? |
+                    (.slots // [])[]? |
+                    select((.stereotype.browserName // "") == $b and (.session // null) == null)
+                  ] | length
                 ')
             if [ "${FREE:-0}" -ge 1 ]; then
-              echo "Free ${BROWSER} slots: $FREE"; break
+              echo "Free ${BROWSER} slots: $FREE"; exit 0
             fi
-            echo "No free ${BROWSER} slot yet... ($i)"; sleep 2
-            if [ $i -eq 120 ]; then
-              echo "Timed out waiting for a free ${BROWSER} slot"
-              curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
-              exit 1
-            fi
+            echo "Waiting for free ${BROWSER} slot... ($i)"; sleep 2
           done
+          echo "No free ${BROWSER} slot"; exit 1
 
+      # ---- Run tests ----
       - name: Run tests
         run: |
           mkdir -p TestResults Screenshots
@@ -146,6 +141,7 @@ jobs:
             **/Screenshots/**
           if-no-files-found: ignore
 
+      # Helpful logs if anything misbehaves
       - name: Debug containers (docker ps + logs)
         if: failure() || always()
         run: |
