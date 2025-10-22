@@ -83,7 +83,7 @@ jobs:
             sudo apt-get install -y jq
           fi
 
-      # Wait until hub is ready, nodes are registered, and there is a free slot for the current browser
+      # Wait: hub ready -> nodes registered -> free slot for ${BROWSER}
       - name: Wait for Selenium Grid (hub + nodes + free slot)
         shell: bash
         run: |
@@ -91,57 +91,44 @@ jobs:
 
           echo "Waiting for hub readiness..."
           for i in {1..60}; do
-            READY=$(curl -fsS http://localhost:4444/status | awk -F'ready\":' '{print $2}' | grep -o 'true' || true)
-            [[ "$READY" == "true" ]] && echo "Hub is ready" && break
+            if curl -fsS http://localhost:4444/status | grep -q '"ready":true'; then
+              echo "Hub is ready"; break
+            fi
             echo "Hub not ready yet... ($i)"; sleep 2
-            [[ $i -eq 60 ]] && echo "Hub never became ready" && exit 1
+            if [ $i -eq 60 ]; then echo "Hub never became ready"; exit 1; fi
           done
 
           echo "Waiting for any node to register..."
           for i in {1..120}; do
             NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
-              | python3 - <<'PY'
-import sys, json
-data=json.load(sys.stdin)
-nodes=(data.get("distributor",{}).get("status",{}).get("nodes") or [])
-print(len(nodes))
-PY
-            )
-            if [[ "${NODES:-0}" -ge 1 ]]; then
-              echo "Nodes registered: $NODES"
-              break
+              | jq -r '((.distributor.status.nodes // []) | length)')
+            if [ "${NODES:-0}" -ge 1 ]; then
+              echo "Nodes registered: $NODES"; break
             fi
             echo "No nodes yet... ($i)"; sleep 2
-            [[ $i -eq 120 ]] && echo "Timed out waiting for nodes" && exit 1
+            if [ $i -eq 120 ]; then echo "Timed out waiting for nodes"; exit 1; fi
           done
 
-          echo "Waiting for at least one free slot for ${BROWSER}..."
+          echo "Waiting for a free '${BROWSER}' slot..."
           for i in {1..120}; do
             FREE=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
-              | python3 - "$BROWSER" <<'PY'
-import sys, json
-browser=sys.argv[1]
-data=json.load(sys.stdin)
-nodes=(data.get("distributor",{}).get("status",{}).get("nodes") or [])
-free=0
-for n in nodes:
-  for s in (n.get("slots") or []):
-    if (s.get("stereotype",{}).get("browserName","").lower()==browser.lower()
-        and not s.get("session")):
-      free+=1
-print(free)
-PY
-            )
-            if [[ "${FREE:-0}" -ge 1 ]]; then
-              echo "Free ${BROWSER} slots: $FREE"
-              exit 0
+              | jq -r --arg b "$BROWSER" '
+                    [
+                      (.distributor.status.nodes // [])[]? |
+                      (.slots // [])[]? |
+                      select((.stereotype.browserName // "") == $b and (.session // null) == null)
+                    ] | length
+                ')
+            if [ "${FREE:-0}" -ge 1 ]; then
+              echo "Free ${BROWSER} slots: $FREE"; break
             fi
             echo "No free ${BROWSER} slot yet... ($i)"; sleep 2
+            if [ $i -eq 120 ]; then
+              echo "Timed out waiting for a free ${BROWSER} slot"
+              curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
+              exit 1
+            fi
           done
-
-          echo "Timed out waiting for a free ${BROWSER} slot"
-          curl -fsS http://localhost:4444/se/grid/distributor/status | head -n 400 || true
-          exit 1
 
       - name: Run tests
         run: |
