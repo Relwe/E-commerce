@@ -1,6 +1,7 @@
 name: Selenium Grid CI
 
 on:
+  workflow_dispatch:   # allow manual runs from the Actions tab
   push:
     branches: [ main, master ]
   pull_request:
@@ -10,6 +11,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # Start a temporary Selenium Grid for this job
     services:
       selenium-hub:
         image: selenium/hub:4.23.0
@@ -27,8 +29,9 @@ jobs:
           SE_EVENT_BUS_HOST: selenium-hub
           SE_EVENT_BUS_PUBLISH_PORT: 4442
           SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
-        options: >-
-          --shm-size="2g"
+          SE_NODE_MAX_SESSIONS: 1
+          SE_NODE_OVERRIDE_MAX_SESSIONS: 'true'
+        options: --shm-size="2g"
 
       firefox:
         image: selenium/node-firefox:4.23.0
@@ -36,8 +39,9 @@ jobs:
           SE_EVENT_BUS_HOST: selenium-hub
           SE_EVENT_BUS_PUBLISH_PORT: 4442
           SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
-        options: >-
-          --shm-size="2g"
+          SE_NODE_MAX_SESSIONS: 1
+          SE_NODE_OVERRIDE_MAX_SESSIONS: 'true'
+        options: --shm-size="2g"
 
     strategy:
       fail-fast: false
@@ -45,9 +49,11 @@ jobs:
         browser: [ chrome, firefox ]
 
     env:
+      # Your factory reads these:
       RUN_TARGET: remote
-      GRID_URL: http://localhost:4444
+      GRID_URL: http://localhost:4444      # <- in Actions, talk to services via localhost
       BROWSER: ${{ matrix.browser }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
     steps:
       - name: Checkout
@@ -66,31 +72,59 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Restore dependencies
+      - name: Restore
         run: dotnet restore
 
-      - name: Build
+      - name: Build (Release)
         run: dotnet build --configuration Release --no-restore
 
-      - name: Wait for Selenium Grid
+      # jq is usually preinstalled, but this makes the job robust
+      - name: Ensure jq is available
         run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      # Wait until hub is ready AND at least one free slot exists for the current browser
+      - name: Wait for Selenium Grid (hub + slots)
+        run: |
+          set -e
+          echo "Waiting for hub readiness..."
           for i in {1..60}; do
             READY=$(curl -s http://localhost:4444/status | jq -r '.value.ready')
             if [ "$READY" = "true" ]; then
-              echo "Grid is ready"
+              echo "Hub is ready"
               break
             fi
-            echo "Waiting for grid..."
-            sleep 2
+            echo "Hub not ready yet..."; sleep 2
+            if [ $i -eq 60 ]; then echo "Hub never became ready"; exit 1; fi
           done
 
-      - name: Run Selenium tests
+          echo "Waiting for an available '${BROWSER}' slot..."
+          for i in {1..90}; do
+            AVAILABLE=$(curl -s http://localhost:4444/se/grid/distributor/status \
+              | jq "[.distributor.status.nodes[].slots[]
+                     | select(.stereotype.\"browserName\"==\"${BROWSER}\" and .session==null)] | length")
+            if [ "$AVAILABLE" -ge 1 ]; then
+              echo "Found ${AVAILABLE} free '${BROWSER}' slot(s)."
+              exit 0
+            fi
+            echo "No free '${BROWSER}' slot yet..."; sleep 2
+          done
+          echo "Timed out waiting for a free '${BROWSER}' slot"; exit 1
+
+      - name: Run tests
         run: |
           mkdir -p TestResults Screenshots
           dotnet test --configuration Release --no-build \
             --logger "trx;LogFileName=TestResults_${{ matrix.browser }}.trx"
+          # If you use runsettings:
+          # dotnet test --configuration Release --no-build \
+          #   --settings tests.runsettings \
+          #   --logger "trx;LogFileName=TestResults_${{ matrix.browser }}.trx"
 
-      - name: Upload Test Artifacts (TRX + Screenshots)
+      - name: Upload test artifacts (TRX + screenshots)
         if: always()
         uses: actions/upload-artifact@v4
         with:
