@@ -8,6 +8,7 @@ using OpenQA.Selenium.BiDi.Communication;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Firefox;
 using OpenQA.Selenium.Remote;
+using NUnit.Framework;
 
 namespace BestBuy.Drivers
 {
@@ -43,6 +44,26 @@ namespace BestBuy.Drivers
             // Works when running tests on host
             return new Uri("http://localhost:4444");
         }
+
+        private static BrowserType GetBrowser()
+        {
+            // 1) NUnit TestParameters (runsettings) win
+            var fromParams = TestContext.Parameters.Get("Browser");
+            if (!string.IsNullOrWhiteSpace(fromParams) &&
+                Enum.TryParse<BrowserType>(fromParams, true, out var b1))
+                return b1;
+
+            // 2) env var BROWSER (GitHub Actions matrix)
+            var fromEnv = Environment.GetEnvironmentVariable("BROWSER");
+            if (!string.IsNullOrWhiteSpace(fromEnv) &&
+                Enum.TryParse<BrowserType>(fromEnv, true, out var b2))
+                return b2;
+
+            // 3) default
+            return BrowserType.Chrome;
+        }
+
+        public static IWebDriver Create() => Create(GetBrowser());
 
         // ---------- Local drivers (Selenium Manager will fetch binaries automatically) ----------
         private static IWebDriver CreateLocal(BrowserType browser)

@@ -11,7 +11,7 @@ namespace BestBuy.Tests
     [TestFixture(BrowserType.Firefox)]
     public class Tests : BaseTest
     {
-        public Tests(BrowserType browser) : base(browser) { }
+        public Tests(BrowserType browser) : base() { }
         [Test]
         [TestCaseSource(typeof(TestDataCsv), nameof(TestDataCsv.SearchStrings))]
         public void Test1(string query, int maxPrice, int itemsCount)
