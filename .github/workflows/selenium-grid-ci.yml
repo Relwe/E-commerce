@@ -48,18 +48,32 @@ jobs:
 
       # ---- Start Selenium Grid using Docker Compose ----
       - name: Start Selenium Grid
-        run: |
-          docker compose -f docker-compose.yml up -d
+        run: docker compose -f docker-compose.yml up -d
 
-      - name: Wait for Grid to be ready
+      - name: Wait for hub HTTP and ready
         run: |
           for i in {1..60}; do
-            if curl -fsS http://localhost:4444/status | grep -q '"ready":true'; then
-              echo "Grid is ready"; exit 0
+            STATUS=$(curl -fsS http://localhost:4444/status || true)
+            echo "$STATUS" | jq '.' || echo "$STATUS"
+            if echo "$STATUS" | jq -e '.value.ready == true' >/dev/null 2>&1; then
+              echo "Hub HTTP reachable and ready"; exit 0
             fi
-            echo "Waiting for Grid... ($i)"; sleep 2
+            echo "Waiting for hub ready... ($i)"; sleep 2
           done
-          echo "Grid never became ready"; exit 1
+          echo "Hub never reported ready"; exit 1
+
+      - name: Wait for nodes to register
+        run: |
+          for i in {1..120}; do
+            NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status || true \
+              | jq -r '((.distributor.status.nodes // []) | length)')
+            echo "Distributor nodes: ${NODES:-0}"
+            if [ "${NODES:-0}" -ge 1 ]; then
+              echo "Nodes registered: $NODES"; exit 0
+            fi
+            echo "Waiting for nodes... ($i)"; sleep 2
+          done
+          echo "Nodes never registered"; exit 1
 
       # ---- Run tests ----
       - name: Run tests
