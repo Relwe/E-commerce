@@ -1,12 +1,147 @@
-name: Sanity
+name: Selenium Grid CI
 
 on:
   workflow_dispatch:
   push:
     branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 
 jobs:
-  hello:
+  test:
     runs-on: ubuntu-latest
+
+    services:
+      selenium-hub:
+        image: selenium/hub:4.23.0
+        ports:
+          - 4444:4444
+        options: >-
+          --health-cmd="curl -s http://localhost:4444/status | jq -r .value.ready | grep true || exit 1"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+
+      chrome:
+        image: selenium/node-chrome:4.23.0
+        env:
+          SE_EVENT_BUS_HOST: selenium-hub
+          SE_EVENT_BUS_PUBLISH_PORT: 4442
+          SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+          SE_NODE_MAX_SESSIONS: 1
+          SE_NODE_OVERRIDE_MAX_SESSIONS: 'true'
+        options: --shm-size="2g"
+
+      firefox:
+        image: selenium/node-firefox:4.23.0
+        env:
+          SE_EVENT_BUS_HOST: selenium-hub
+          SE_EVENT_BUS_PUBLISH_PORT: 4442
+          SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+          SE_NODE_MAX_SESSIONS: 1
+          SE_NODE_OVERRIDE_MAX_SESSIONS: 'true'
+        options: --shm-size="2g"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [ chrome, firefox ]
+
+    env:
+      RUN_TARGET: remote
+      GRID_URL: http://localhost:4444
+      BROWSER: ${{ matrix.browser }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
     steps:
-      - run: echo "Workflow detected ✅"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (Release)
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Ensure jq is available
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      # Safer wait: first wait for hub ready, then verify at least one node registered.
+      - name: Wait for Selenium Grid (hub + nodes)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Waiting for hub readiness..."
+          for i in {1..60}; do
+            READY=$(curl -fsS http://localhost:4444/status | jq -r '.value.ready // false')
+            [[ "$READY" == "true" ]] && echo "Hub is ready" && break
+            echo "Hub not ready yet... ($i)"; sleep 2
+            [[ $i -eq 60 ]] && echo "Hub never became ready" && exit 1
+          done
+
+          echo "Waiting for any node to register..."
+          for i in {1..90}; do
+            NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
+              | jq -r '((.distributor.status.nodes // []) | length)')
+            if [[ "$NODES" -ge 1 ]]; then
+              echo "Nodes registered: $NODES"
+              break
+            fi
+            echo "No nodes yet... ($i)"; sleep 2
+            [[ $i -eq 90 ]] && echo "Timed out waiting for nodes" && exit 1
+          done
+
+          echo "Waiting for at least one free slot for ${BROWSER}..."
+          for i in {1..120}; do
+            FREE=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
+              | jq --arg b "$BROWSER" -r '
+                  [
+                    (.distributor.status.nodes // [])[] |
+                    (.slots // [])[] |
+                    select((.stereotype.browserName // "") == $b and (.session // null) == null)
+                  ] | length
+                ')
+            if [[ "$FREE" -ge 1 ]]; then
+              echo "Free ${BROWSER} slots: $FREE"
+              exit 0
+            fi
+            echo "No free ${BROWSER} slot yet... ($i)"; sleep 2
+          done
+
+          echo "Timed out waiting for a free ${BROWSER} slot"
+          curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
+          exit 1
+
+      - name: Run tests
+        run: |
+          mkdir -p TestResults Screenshots
+          dotnet test --configuration Release --no-build \
+            --logger "trx;LogFileName=TestResults_${{ matrix.browser }}.trx"
+
+      - name: Upload test artifacts (TRX + screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-${{ matrix.browser }}
+          path: |
+            **/TestResults_*.trx
+            **/Screenshots/**
+          if-no-files-found: ignore
