@@ -12,33 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    services:
-      selenium-hub:
-        image: selenium/hub:4.23.0
-        ports:
-          - 4444:4444
-        # no healthcheck (we'll handle readiness in steps)
-
-      chrome:
-        image: selenium/node-chrome:4.23.0
-        env:
-          SE_EVENT_BUS_HOST: selenium-hub
-          SE_EVENT_BUS_PUBLISH_PORT: 4442
-          SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
-          SE_NODE_MAX_SESSIONS: 1
-          SE_NODE_OVERRIDE_MAX_SESSIONS: 'true'
-        options: --shm-size="2g"
-
-      firefox:
-        image: selenium/node-firefox:4.23.0
-        env:
-          SE_EVENT_BUS_HOST: selenium-hub
-          SE_EVENT_BUS_PUBLISH_PORT: 4442
-          SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
-          SE_NODE_MAX_SESSIONS: 1
-          SE_NODE_OVERRIDE_MAX_SESSIONS: 'true'
-        options: --shm-size="2g"
-
     strategy:
       fail-fast: false
       matrix:
@@ -73,64 +46,22 @@ jobs:
       - name: Build (Release)
         run: dotnet build --configuration Release --no-restore
 
-      - name: Ensure jq is available
+      # ---- Start Selenium Grid using Docker Compose ----
+      - name: Start Selenium Grid
         run: |
-          if ! command -v jq >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
+          docker-compose -f docker-compose.yml up -d
 
-      # 1) Hub HTTP reachable (200 OK). Don't check "ready": true.
-      - name: Wait for hub HTTP
+      - name: Wait for Grid to be ready
         run: |
-          for i in {1..120}; do
-            if curl -fsS http://localhost:4444/status >/dev/null; then
-              echo "Hub HTTP reachable"
-              exit 0
+          for i in {1..60}; do
+            if curl -fsS http://localhost:4444/status | grep -q '"ready":true'; then
+              echo "Grid is ready"; exit 0
             fi
-            echo "Waiting for hub HTTP... ($i)"; sleep 2
+            echo "Waiting for Grid... ($i)"; sleep 2
           done
-          echo "Hub never became reachable"; exit 1
+          echo "Grid never became ready"; exit 1
 
-      # 2) Nodes register with distributor
-      - name: Wait for nodes to register
-        run: |
-          for i in {1..180}; do
-            NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
-              | jq -r '((.distributor.status.nodes // []) | length)')
-            if [ "${NODES:-0}" -ge 1 ]; then
-              echo "Nodes registered: $NODES"
-              exit 0
-            fi
-            echo "Waiting for nodes... ($i)"; sleep 2
-          done
-          echo "Nodes never registered"
-          # show snapshot to help debug
-          curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
-          exit 1
-
-      # 3) At least one free slot for current browser
-      - name: Wait for a free '${{ matrix.browser }}' slot
-        run: |
-          for i in {1..180}; do
-            FREE=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
-              | jq -r --arg b "${BROWSER}" '
-                    [
-                      (.distributor.status.nodes // [])[]? |
-                      (.slots // [])[]? |
-                      select((.stereotype.browserName // "") == $b and (.session // null) == null)
-                    ] | length
-                ')
-            if [ "${FREE:-0}" -ge 1 ]; then
-              echo "Free ${BROWSER} slots: $FREE"
-              exit 0
-            fi
-            echo "Waiting for free ${BROWSER} slot... ($i)"; sleep 2
-          done
-          echo "No free ${BROWSER} slot"
-          curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
-          exit 1
-
+      # ---- Run tests ----
       - name: Run tests
         run: |
           mkdir -p TestResults Screenshots
@@ -146,14 +77,3 @@ jobs:
             **/TestResults_*.trx
             **/Screenshots/**
           if-no-files-found: ignore
-
-      - name: Debug containers (docker ps + logs)
-        if: failure() || always()
-        run: |
-          docker ps -a
-          echo '=== Hub logs ==='
-          docker logs $(docker ps -aq --filter "ancestor=selenium/hub:4.23.0") || true
-          echo '=== Chrome logs ==='
-          docker logs $(docker ps -aq --filter "ancestor=selenium/node-chrome:4.23.0") || true
-          echo '=== Firefox logs ==='
-          docker logs $(docker ps -aq --filter "ancestor=selenium/node-firefox:4.23.0") || true
