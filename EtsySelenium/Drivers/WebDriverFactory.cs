@@ -102,7 +102,7 @@ namespace BestBuy.Drivers
             if (headless)
                 options.AddArgument("--headless");
 
-            var driver = new FirefoxDriver(service, options, TimeSpan.FromMinutes(3));
+            var driver = new FirefoxDriver(service, options, TimeSpan.FromMinutes(10));
 
             driver.Manage().Timeouts().PageLoad = TimeSpan.FromMinutes(2);
             driver.Manage().Timeouts().AsynchronousJavaScript = TimeSpan.FromSeconds(30);
@@ -112,7 +112,7 @@ namespace BestBuy.Drivers
         }
         private static IWebDriver CreateRemote(BrowserType browser, Uri gridUrl)
         {
-            var cmdTimeout = TimeSpan.FromMinutes(3);
+            var cmdTimeout = TimeSpan.FromMinutes(10);
 
             return browser switch
             {
