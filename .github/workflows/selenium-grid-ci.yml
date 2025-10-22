@@ -17,7 +17,7 @@ jobs:
         image: selenium/hub:4.23.0
         ports:
           - 4444:4444
-        # no healthcheck here
+        # no healthcheck (we'll handle readiness in steps)
 
       chrome:
         image: selenium/node-chrome:4.23.0
@@ -73,58 +73,64 @@ jobs:
       - name: Build (Release)
         run: dotnet build --configuration Release --no-restore
 
-      # ---- Wait for Grid (no container healthcheck) ----
+      - name: Ensure jq is available
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      # 1) Hub HTTP reachable (200 OK). Don't check "ready": true.
       - name: Wait for hub HTTP
         run: |
-          for i in {1..60}; do
+          for i in {1..120}; do
             if curl -fsS http://localhost:4444/status >/dev/null; then
-              echo "Hub HTTP reachable"; exit 0
+              echo "Hub HTTP reachable"
+              exit 0
             fi
             echo "Waiting for hub HTTP... ($i)"; sleep 2
           done
           echo "Hub never became reachable"; exit 1
 
-      - name: Wait for hub ready flag
-        run: |
-          for i in {1..60}; do
-            if curl -fsS http://localhost:4444/status | grep -q '"ready":true'; then
-              echo "Hub is ready"; exit 0
-            fi
-            echo "Waiting for hub ready... ($i)"; sleep 2
-          done
-          echo "Hub never reported ready"; exit 1
-
+      # 2) Nodes register with distributor
       - name: Wait for nodes to register
         run: |
-          for i in {1..120}; do
+          for i in {1..180}; do
             NODES=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
               | jq -r '((.distributor.status.nodes // []) | length)')
             if [ "${NODES:-0}" -ge 1 ]; then
-              echo "Nodes registered: $NODES"; exit 0
+              echo "Nodes registered: $NODES"
+              exit 0
             fi
             echo "Waiting for nodes... ($i)"; sleep 2
           done
-          echo "Nodes never registered"; exit 1
+          echo "Nodes never registered"
+          # show snapshot to help debug
+          curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
+          exit 1
 
+      # 3) At least one free slot for current browser
       - name: Wait for a free '${{ matrix.browser }}' slot
         run: |
-          for i in {1..120}; do
+          for i in {1..180}; do
             FREE=$(curl -fsS http://localhost:4444/se/grid/distributor/status \
               | jq -r --arg b "${BROWSER}" '
-                  [
-                    (.distributor.status.nodes // [])[]? |
-                    (.slots // [])[]? |
-                    select((.stereotype.browserName // "") == $b and (.session // null) == null)
-                  ] | length
+                    [
+                      (.distributor.status.nodes // [])[]? |
+                      (.slots // [])[]? |
+                      select((.stereotype.browserName // "") == $b and (.session // null) == null)
+                    ] | length
                 ')
             if [ "${FREE:-0}" -ge 1 ]; then
-              echo "Free ${BROWSER} slots: $FREE"; exit 0
+              echo "Free ${BROWSER} slots: $FREE"
+              exit 0
             fi
             echo "Waiting for free ${BROWSER} slot... ($i)"; sleep 2
           done
-          echo "No free ${BROWSER} slot"; exit 1
+          echo "No free ${BROWSER} slot"
+          curl -fsS http://localhost:4444/se/grid/distributor/status | jq -C | head -n 200 || true
+          exit 1
 
-      # ---- Run tests ----
       - name: Run tests
         run: |
           mkdir -p TestResults Screenshots
@@ -141,7 +147,6 @@ jobs:
             **/Screenshots/**
           if-no-files-found: ignore
 
-      # Helpful logs if anything misbehaves
       - name: Debug containers (docker ps + logs)
         if: failure() || always()
         run: |
