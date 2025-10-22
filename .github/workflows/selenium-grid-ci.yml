@@ -46,7 +46,7 @@ jobs:
 
     env:
       RUN_TARGET: remote
-      GRID_URL: http://selenium-hub:4444
+      GRID_URL: http://localhost:4444
       BROWSER: ${{ matrix.browser }}
 
     steps:
