@@ -11,7 +11,7 @@ namespace BestBuy.Tests
     [TestFixture(BrowserType.Firefox)]
     public class Tests : BaseTest
     {
-        public Tests(BrowserType browser) : base() { }
+        public Tests(BrowserType browser) : base(browser) { }
         [Test]
         [TestCaseSource(typeof(TestDataCsv), nameof(TestDataCsv.SearchStrings))]
         public void Test1(string query, int maxPrice, int itemsCount)
@@ -24,10 +24,6 @@ namespace BestBuy.Tests
             AddItemsToCart(results);
             AssertCartTotalNotExceeds(maxPrice, itemsCount);
             
-
-            Log.Info("Navigate to home page");
-
-            
         }
 
         public void AddItemsToCart(string[] urls)
@@ -35,7 +31,6 @@ namespace BestBuy.Tests
             foreach (string url in urls)
             {
                 Driver.Navigate().GoToUrl(url.ToString());
-                //Thread.Sleep(30000);
                 
                 var itemPage = new ItemPage(Driver, Log);
                 itemPage.AddToCart();

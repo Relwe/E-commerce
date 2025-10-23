@@ -25,8 +25,12 @@ namespace BestBuy.Infrastructure
         protected ExtentTest Log => _test.Value;
 
         private static ExtentReports _extent;
+        protected readonly BrowserType Browser;
 
-        protected BaseTest() { }
+        protected BaseTest(BrowserType browser)
+        {
+            Browser = browser;
+        }
 
         [OneTimeSetUp]
         public void OneTimeSetUp_Base()
@@ -38,7 +42,7 @@ namespace BestBuy.Infrastructure
         public void SetUp_Base()
         {
             //var gridUrl = GetGridUrl();
-            _driver.Value = Create();
+            _driver.Value = Create(Browser);
 
             // 2) Start an Extent test node
             var testName = TestContext.CurrentContext.Test.Name;

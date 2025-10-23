@@ -9,9 +9,9 @@ namespace BestBuy.Pages
 {
     internal class HomePage : BasePage
     {
-        public IWebElement SearchField => FindSmart(By.Id("autocomplete-search-bar"));
-        public IWebElement SearchBtn => FindSmart(By.Id("autocomplete-search-button"));
-
+        public IWebElement SearchField => FindSmart(By.Id("autocomplete-search-bar"), By.XPath("//*[@id=\"autocomplete-search-bar\"]"));
+        public IWebElement SearchBtn => FindSmart(By.Id("autocomplete-search-button"), By.XPath("//*[@id=\"autocomplete-search-button\"]"));
+        
         public HomePage(IWebDriver driver) : base(driver) { }
       
 
@@ -40,5 +40,7 @@ namespace BestBuy.Pages
             resultsPage.SetMinMaxPrice("0", maxPrice.ToString());
             return resultsPage.GetProductUrls(limit);
         }
+
+
     }
 }

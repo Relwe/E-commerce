@@ -16,18 +16,9 @@ namespace BestBuy.Pages
         }
 
         public IWebElement AddToCartBtn => FindSmart(By.CssSelector("[data-test-id=\"add-to-cart\"]"), By.XPath("//*[@id=\"a2c\"]/div/div/div/button"));
-        //public IWebElement Drawer => FindSmart(By.CssSelector("[data-testid=\"drawer\"]"));
-       // public IWebDriver Driver { get; }
 
         internal void AddToCart()
         {
-            //try
-            //{
-            //    wait.Until(drv => drv.FindElement(By.CssSelector("[class=\"blue-assist-minimized-beacon\"]")));
-            //}
-            //catch { }
-            //wait.Until(drv => drv.FindElement(By.CssSelector("[class=\"cart-label\"]")).Displayed);
-            //wait.Until(drv => drv.FindElement(By.CssSelector("[data-testid=\"name-non-clickable\"]")).Displayed);
             IsDomStable(driver);
             var ss = ((ITakesScreenshot)driver).GetScreenshot();
             var base64 = ss.AsBase64EncodedString;
@@ -38,11 +29,10 @@ namespace BestBuy.Pages
             
             ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView({block: 'center'});", AddToCartBtn);
             wait.Until(ExpectedConditions.ElementToBeClickable(AddToCartBtn));
+            IsDomStable(driver);
             AddToCartBtn.Click();
             wait.Until(drv => { return AddToCartBtn.Text.Trim() == "Add to cart"; });
 
-            //while (!Drawer.Displayed)
-            //    continue;
         }
     }
 }
