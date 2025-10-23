@@ -10,7 +10,6 @@ Run tests on Selenium Grid (Dockerized hub + browser nodes)
 
 docker compose -f docker/selenium-grid.yml down -v
 
-
 Execute tests in parallel across Chrome and Firefox
 
 Easily toggle headless mode for CI environments
@@ -20,6 +19,22 @@ Compatible with local runs, Docker containers, and GitHub Actions
 Structured for clean separation of pages, tests, and infrastructure
 
 Includes .runsettings file for environment configuration
+
+## Project Structure
+
+.
+├── docker/
+│   └── selenium-grid.yml         # Docker Compose for hub & nodes
+├── tests/
+│   ├── Infrastructure/           # DriverFactory, BaseTest, setup hooks
+│   ├── Pages/                    # Page Object Model classes
+│   ├── Tests/                    # NUnit test classes
+│   └── tests.runsettings         # Test environment configuration
+|   └── Utils/                    # All Utils files
+├── .github/workflows/            # Optional CI/CD workflows
+│   └── selenium-grid-ci.yml
+└── README.md
+
 
 ## Running Selenium Grid with Docker
 
