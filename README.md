@@ -20,20 +20,10 @@ Structured for clean separation of pages, tests, and infrastructure
 
 Includes .runsettings file for environment configuration
 
-## Project Structure
+## Usage
 
-.
-├── docker/
-│   └── selenium-grid.yml         # Docker Compose for hub & nodes
-├── tests/
-│   ├── Infrastructure/           # DriverFactory, BaseTest, setup hooks
-│   ├── Pages/                    # Page Object Model classes
-│   ├── Tests/                    # NUnit test classes
-│   └── tests.runsettings         # Test environment configuration
-|   └── Utils/                    # All Utils files
-├── .github/workflows/            # Optional CI/CD workflows
-│   └── selenium-grid-ci.yml
-└── README.md
+To run the test you need to have a csv file that includes a query a maximum price and item count number.
+The first line in the file is just titles, and any other line will run a different test with that data.
 
 
 ## Running Selenium Grid with Docker
@@ -45,3 +35,20 @@ Open the Selenium Grid UI:
 http://localhost:4444/ui
 
 Stop and clean up:
+docker compose -f docker/selenium-grid.yml down -v
+
+## Project Structure
+.
+├──docker/  
+│   ├──   selenium-grid.yml         # Docker Compose for hub & nodes  
+├── tests/  
+│   ├── Infrastructure/           # DriverFactory, BaseTest, setup hooks  
+│   ├── Pages/                    # Page Object Model classes  
+│   ├── Tests/                    # NUnit test classes  
+│   └── tests.runsettings         # Test environment configuration  
+|   └── Utils/                    # All Utils files  
+├── .github/workflows/            # Optional CI/CD workflows  
+│   └── selenium-grid-ci.yml  
+└── README.md  
+
+
